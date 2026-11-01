@@ -1,0 +1,31 @@
+#!/bin/sh
+# S99launcher: start LVGL launcher on /dev/fb0 after display driver is up
+DAEMON=/usr/bin/launcher
+test -x $DAEMON || exit 0
+
+case "$1" in
+  start)
+	# wait for framebuffer (disp2 probes async)
+	n=0
+	while [ ! -e /dev/fb0 ] && [ $n -lt 100 ]; do
+		sleep 0.1
+		n=$((n+1))
+	done
+	[ -e /dev/fb0 ] || exit 0
+	# clear fbcon text so it doesn't bleed through
+	for i in 1 2 3 4; do :; done
+	start-stop-daemon -S -b -m -p /var/run/launcher.pid -x $DAEMON
+	;;
+  stop)
+	start-stop-daemon -K -p /var/run/launcher.pid -x $DAEMON 2>/dev/null
+	;;
+  restart)
+	"$0" stop
+	"$0" start
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
+exit 0

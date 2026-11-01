@@ -1,0 +1,23 @@
+From: K4B port <lzp5518@hotmail.com>
+Subject: [PATCH] rename dtb target to sun8i-kickpi-k4b-linux.dtb
+
+---
+ arch/arm/boot/dts/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm/boot/dts/Makefile b/arch/arm/boot/dts/Makefile
+index 7014caa17..781c5bb89 100644
+--- a/arch/arm/boot/dts/Makefile
++++ b/arch/arm/boot/dts/Makefile
+@@ -1136,7 +1136,7 @@ dtb-$(CONFIG_MACH_SUNIV) += \
+ dtb-$(CONFIG_ARCH_SUN8IW15P1) += \
+ 	board.dtb
+ dtb-$(CONFIG_ARCH_SUN8IW20) += \
+-	board.dtb
++	sun8i-kickpi-k4b-linux.dtb
+ dtb-$(CONFIG_ARCH_TANGO) += \
+ 	tango4-vantage-1172.dtb
+ dtb-$(CONFIG_ARCH_TEGRA_2x_SOC) += \
+--
+2.17.1
+

@@ -1,0 +1,902 @@
+/*
+ * KICKPI K4B (Allwinner T113-S3) board dts
+ *
+ * 引脚分配依据：K4B_V1.2_20250213.pdf（doc/schematic/）
+ *  - p7  SOC2：全板 GPIO 网络总表
+ *  - p17 GPIO/DEBUG/RS485/RS232/KEY-ADC：30Pin 扩展座与调试口
+ *  - p9  LCD：MIPI DSI 4-lane + CTP
+ *  - p13 CAN：TCAN1044V-Q1 x2（3.3V）
+ *  - p14 RMII：IP101GR 100M 以太网
+ *  - p15 EXT-RTC：HYM8563TS + WORKING_LEDEN_H（蓝灯心跳）
+ *
+ * 30Pin 扩展座（JP1，与原理图/vendor pinout 图一致）：
+ *   1  VCC3V3         2  PG12 I2S1-LRCK (alt TWI0_SCK/UART1_TX)
+ *   3  PG5  UART5_RX  4  PG13 I2S1-BCLK (alt TWI0_SDA/UART1_RX)
+ *   5  PG4  UART5_TX  6  PG14 I2S1-DIN0 (alt TWI2_SCK/UART1_RTS)
+ *   7  PD14 GPIO     8  PG15 I2S1-DOUT0 (alt TWI2_SDA/UART1_CTS)
+ *   9  GND          10  PG6  UART1_TX (RS485)
+ *  11  USB_HOST_DP  12  PG7  UART1_RX (RS485)
+ *  13  USB_HOST_DM  14  GND
+ *  15/17 VCC5V       16  PG2  UART4_TX
+ *  18  PG3  UART4_RX 19  PD12 SPI1_MOSI
+ *  20  PD19 PWM3     21  PD13 SPI1_MISO
+ *  22  PB3  CAN0_RX (alt TWI0_SCK/UART4_RX)  23  PD11 SPI1_CLK (alt UART3_RX)
+ *  24  PB2  CAN0_TX (alt TWI0_SDA/UART4_TX)  25  PD10 SPI1_CS  (alt UART3_TX)
+ *  26  PB4  CAN1_RX (alt TWI1_SCK/UART5_TX)  27  PG11 TWI3_SDA (EXTRTC)
+ *  28  PB5  CAN1_TX (alt TWI1_SDA/UART5_RX)  29  PG10 TWI3_SCK (EXTRTC)
+ *  30  LRADC/GPADC0 ADKEY0 (USER 按键)
+ *
+ * 板载资源：
+ *  - 调试串口：UART3 PB6(TX)/PB7(RX)，3pin 座 CON1（ttyS3）
+ *  - 以太网：RMII IP101GR，PE0-PE9，PHY 复位 PE13，EPHY 25M 输出 PE10
+ *  - USB：USB0 OTG Type-C（ID 检测 PE12，VBUS 驱动 PD20）；USB1 → GL850G HUB
+ *    （2x Type-A + RTL8723BU WiFi + 4G mini-PCIE，均 USB 总线，无 SDIO WiFi）
+ *  - WiFi：RTL8723BU（USB），4G：mini-PCIE（PCIE_PWREN_H = PG0）
+ *  - LCD：MIPI DSI 4-lane PD0-PD9；LCD_PWREN_H=PD18，LCD-RST=PD21，
+ *    背光 PWM7=PD22；CTP(TWI1)=PG8/PG9，CTP-INT=PD17，CTP-RST=PD16
+ *  - 音频：内置 codec，喇叭 PA SHDN#=PE11，耳机检测 HP-DET=PD15
+ *  - USER 按键：GPADC0（ADKEY0）
+ *  - 蓝色心跳 LED：WORKING_LEDEN_H = PG1（绿灯为电源直连，无软件控制）
+ *  - CPU 供电：SY8088 固定 0.95V（无 PWM 调压，不支持内核 DVFS）
+ */
+
+/dts-v1/;
+
+ /* optee used 7MB: SHM 2M: OS: 1M: TA:4M*/
+/memreserve/ 0x41900000 0x00100000;
+/* DSP used 1MB */
+/* /memreserve/ 0x42000000 0x00100000; */
+
+#include "sun8iw20p1-linux.dtsi"
+
+/{
+	model = "KICKPI K4B (Allwinner T113-S3)";
+	compatible = "allwinner,t113", "allwinner,r528", "arm,sun8iw20p1";
+
+	/* K4B: CPU 供电为 SY8088 固定 0.95V，无 PWM regulator（勿启用 DVFS） */
+
+	reg_usb1_vbus: usb1-vbus {
+		compatible = "regulator-fixed";
+		regulator-name = "usb1-vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-enable-ramp-delay = <1000>;
+		/* USB-DRVVBUS：OTG Type-C 口 VBUS 开关使能 */
+		gpio = <&pio PD 20 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	/* 4G mini-PCIE 电源使能：PCIE_PWREN_H = PG0（原理图 p7/p16），高有效 */
+	reg_4g_vbus: regulator-4g {
+		compatible = "regulator-fixed";
+		regulator-name = "4g-vbus";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+		gpio = <&pio PG 0 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	/* 板载指示灯：WORKING_LEDEN_H = PG1（原理图 p7），高电平点亮 */
+	leds {
+		compatible = "gpio-leds";
+
+		work_led {
+			label = "k4b:work";
+			gpios = <&pio PG 1 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+			linux,default-trigger = "heartbeat";
+		};
+	};
+};
+
+&pio {
+	sdc0_pins_a: sdc0@0 {
+		allwinner,pins = "PF0", "PF1", "PF2",
+				 "PF3", "PF4", "PF5";
+		allwinner,function = "sdc0";
+		allwinner,muxsel = <2>;
+		allwinner,drive = <3>;
+		allwinner,pull = <1>;
+		pins = "PF0", "PF1", "PF2",
+		       "PF3", "PF4", "PF5";
+		function = "sdc0";
+		drive-strength = <30>;
+		bias-pull-up;
+		power-source = <3300>;
+	};
+
+	sdc0_pins_b: sdc0@1 {
+		pins = "PF0", "PF1", "PF2",
+		       "PF3", "PF4", "PF5";
+		function = "sdc0";
+		drive-strength = <30>;
+		bias-pull-up;
+		power-source = <1800>;
+	};
+
+	sdc0_pins_c: sdc0@2 {
+		pins = "PF0", "PF1", "PF2",
+			"PF3", "PF4", "PF5";
+		function = "gpio_in";
+	};
+
+	/* 以下两组在 K4B 上不实际使用（UART0 未引出、JTAG 不开），
+	 * 但 sun8iw20p1-linux.dtsi 的 &sdc0 仍引用，必须保留 label
+	 */
+	sdc0_pins_d: sdc0@3 {
+		pins = "PF2", "PF4";
+		function = "uart0";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	sdc0_pins_e: sdc0@4 {
+		pins = "PF0", "PF1", "PF3",
+			"PF5";
+		function = "jtag";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	/* SDC1 在 K4B 上被 UART4/UART5/LED/4G_EN 占用（PG0-PG5），节点已 disabled，
+	 * 同样仅为满足 dtsi 的 phandle 引用而保留定义
+	 */
+	sdc1_pins_a: sdc1@0 {
+		pins = "PG0", "PG1", "PG2",
+		       "PG3", "PG4", "PG5";
+		function = "sdc1";
+		drive-strength = <30>;
+		bias-pull-up;
+	};
+
+	sdc1_pins_b: sdc1@1 {
+		pins = "PG0", "PG1", "PG2",
+		       "PG3", "PG4", "PG5";
+		function = "sdc1";
+	};
+
+	sdc2_pins_a: sdc2@0 {
+		allwinner,pins = "PC2", "PC3", "PC4",
+				 "PC5", "PC6", "PC7";
+		allwinner,function = "sdc2";
+		allwinner,muxsel = <3>;
+		allwinner,drive = <3>;
+		allwinner,pull = <1>;
+		pins = "PC2", "PC3", "PC4",
+			"PC5", "PC6", "PC7";
+		function = "sdc2";
+		drive-strength = <30>;
+		bias-pull-up;
+	};
+
+	sdc2_pins_b: sdc2@1 {
+		pins = "PC2", "PC3", "PC4",
+		       "PC5", "PC6", "PC7";
+		function = "gpio_in";
+	};
+
+	/* UART1 = RS485（PG6/PG7 两线，30Pin 座 10/12 脚） */
+	uart1_pins_a: uart1_pins@0 {
+		pins = "PG6", "PG7";
+		function = "uart1";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	uart1_pins_b: uart1_pins@1 {
+		pins = "PG6", "PG7";
+		function = "gpio_in";
+	};
+
+	/* UART3 = DEBUG 控制台（PB6/PB7，3pin 座） */
+	uart3_pins_a: uart3_pins@0 {
+		pins = "PB6", "PB7";
+		function = "uart3";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	uart3_pins_b: uart3_pins@1 {
+		pins = "PB6", "PB7";
+		function = "gpio_in";
+	};
+
+	/* UART4 = 30Pin 座 16/18 脚 */
+	uart4_pins_a: uart4_pins@0 {
+		pins = "PG2", "PG3";
+		function = "uart4";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	uart4_pins_b: uart4_pins@1 {
+		pins = "PG2", "PG3";
+		function = "gpio_in";
+	};
+
+	/* UART5 = RS232（PG4/PG5，30Pin 座 5/3 脚） */
+	uart5_pins_a: uart5_pins@0 {
+		pins = "PG4", "PG5";
+		function = "uart5";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	uart5_pins_b: uart5_pins@1 {
+		pins = "PG4", "PG5";
+		function = "gpio_in";
+	};
+
+	/* TWI1 = 电容触摸 CTP（PG8/PG9，LCD 座） */
+	twi1_pins_a: twi1@0 {
+		pins = "PG8", "PG9";
+		function = "twi1";
+		drive-strength = <10>;
+	};
+
+	twi1_pins_b: twi1@1 {
+		pins = "PG8", "PG9";
+		function = "gpio_in";
+	};
+
+	/* TWI3 = 板载 RTC HYM8563TS + 30Pin 座 27/29 脚（PG10/PG11） */
+	twi3_pins_a: twi3@0 {
+		pins = "PG10", "PG11";
+		function = "twi3";
+		drive-strength = <10>;
+	};
+
+	twi3_pins_b: twi3@1 {
+		pins = "PG10", "PG11";
+		function = "gpio_in";
+	};
+
+	/* SPI1 = 30Pin 座 19/21/23/25 脚（PD12/PD13/PD11/PD10） */
+	spi1_pins_a: spi1@0 {
+		pins = "PD11", "PD12", "PD13"; /* clk mosi miso */
+		function = "spi1";
+		drive-strength = <10>;
+	};
+
+	spi1_pins_b: spi1@1 {
+		pins = "PD10"; /* cs */
+		function = "spi1";
+		drive-strength = <10>;
+		bias-pull-up;   /* only CS should be pulled up */
+	};
+
+	spi1_pins_c: spi1@2 {
+		allwinner,pins = "PD10", "PD11", "PD12", "PD13";
+		allwinner,function = "gpio_in";
+		allwinner,muxsel = <0>;
+		drive-strength = <10>;
+	};
+
+	/* CAN0 = PB2/PB3（30Pin 座 24/22 脚），CAN1 = PB4/PB5（28/26 脚） */
+	can0_pins_a: can0_pins@0 {
+		pins = "PB2", "PB3";
+		function = "can0";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	can0_pins_b: can0_pins@1 {
+		pins = "PB2", "PB3";
+		function = "gpio_in";
+	};
+
+	can1_pins_a: can1_pins@0 {
+		pins = "PB4", "PB5";
+		function = "can1";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	can1_pins_b: can1_pins@1 {
+		pins = "PB4", "PB5";
+		function = "gpio_in";
+	};
+
+	/* PWM3 = 30Pin 座 20 脚（PD19）；PWM7 = 背光（PD22） */
+	pwm3_pin_a: pwm3@0 {
+		pins = "PD19";
+		function = "pwm3";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	pwm3_pin_b: pwm3@1 {
+		pins = "PD19";
+		function = "gpio_in";
+	};
+
+	pwm7_pin_a: pwm7@0 {
+		pins = "PD22";
+		function = "pwm7";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	pwm7_pin_b: pwm7@1 {
+		pins = "PD22";
+		function = "gpio_in";
+	};
+
+	/* RMII 以太网（IP101GR）+ PHY 复位 PE13 由 gmac 节点 gpio 控制 */
+	gmac0_pins_a: gmac@0 {
+		allwinner,pins = "PE0", "PE1", "PE2", "PE3", "PE4",
+				 "PE5", "PE6", "PE7", "PE8", "PE9";
+		allwinner,function = "gmac0";
+		allwinner,muxsel = <8>;
+		allwinner,drive = <1>;
+		allwinner,pull = <0>;
+	};
+
+	gmac0_pins_b: gmac@1 {
+		allwinner,pins = "PE0", "PE1", "PE2", "PE3", "PE4",
+				 "PE5", "PE6", "PE7", "PE8", "PE9";
+		allwinner,function = "gpio_in";
+		allwinner,muxsel = <0>;
+		allwinner,drive = <1>;
+		allwinner,pull = <0>;
+	};
+
+	daudio1_pins_a: daudio1@0 {
+		/* LRCK, BCLK */
+		pins = "PG12", "PG13";
+		function = "i2s1";
+		drive-strength = <20>;
+		bias-disable;
+	};
+
+	daudio1_pins_b: daudio1@1 {
+		/* DIN0 */
+		pins = "PG14";
+		function = "i2s1_din";
+		drive-strength = <20>;
+		bias-disable;
+	};
+
+	daudio1_pins_c: daudio1@2 {
+		/* DOUT0 */
+		pins = "PG15";
+		function = "i2s1_dout";
+		drive-strength = <20>;
+		bias-disable;
+	};
+
+	daudio1_pins_d: daudio1_sleep@0 {
+		pins = "PG12", "PG13", "PG14", "PG15";
+		function = "io_disabled";
+		drive-strength = <20>;
+		bias-disable;
+	};
+
+	dsi4lane_pins_a: dsi4lane@0 {
+		allwinner,pins = "PD0", "PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD7", "PD8", "PD9";
+		allwinner,pname = "PD0", "PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD7", "PD8", "PD9";
+		allwinner,function = "dsi4lane";
+		allwinner,muxsel = <4>;
+		allwinner,drive = <3>;
+		allwinner,pull = <0>;
+	};
+
+	dsi4lane_pins_b: dsi4lane@1 {
+		allwinner,pins = "PD0", "PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD7", "PD8", "PD9";
+		allwinner,pname = "PD0", "PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD7", "PD8", "PD9";
+		allwinner,function = "dsi4lane_suspend";
+		allwinner,muxsel = <7>;
+		allwinner,drive = <1>;
+		allwinner,pull = <0>;
+	};
+};
+
+/* ============ 串口 ============ */
+/* UART0 不用（K4B 调试口在 UART3；PE2/PE3 已被 RMII 占用，勿启用） */
+&uart0 {
+	status = "disabled";
+};
+
+/* UART1 = RS485 */
+&uart1 {
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&uart1_pins_a>;
+	pinctrl-1 = <&uart1_pins_b>;
+	status = "okay";
+};
+
+/* UART3 = 调试控制台 ttyS3 */
+&uart3 {
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&uart3_pins_a>;
+	pinctrl-1 = <&uart3_pins_b>;
+	status = "okay";
+};
+
+/* UART4 = 30Pin 扩展 */
+&uart4 {
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&uart4_pins_a>;
+	pinctrl-1 = <&uart4_pins_b>;
+	status = "okay";
+};
+
+/* UART5 = RS232 */
+&uart5 {
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&uart5_pins_a>;
+	pinctrl-1 = <&uart5_pins_b>;
+	status = "okay";
+};
+
+&uart2 {
+	status = "disabled";
+};
+
+/* ============ 存储 ============ */
+/* K4B 启动介质：SPI NAND（SPI0/PC 组）或 eMMC（SDC2/PC 组），两者共用 PC2-PC7，
+ * 板上按贴片二选一；另有 SD 卡（SDC0/PF 组，PF6 卡检测）。
+ * 我们从 SD 卡启动，sdc2 与 spi0 均保持关闭。
+ * 若你的板子是 eMMC 版且想用板载系统 → 启用 sdc2；
+ * 若是 SPI NAND 版 → 启用 spi0（此时务必保持 sdc2 关闭，否则引脚冲突）。
+ */
+&sdc2 {
+	status = "disabled";
+};
+
+&sdc0 {
+	bus-width = <4>;
+	cd-gpios = <&pio PF 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+	cd-used-24M;
+	cap-sd-highspeed;
+	no-sdio;
+	no-mmc;
+	sunxi-power-save-mode;
+	max-frequency = <150000000>;
+	ctl-spec-caps = <0x8>;
+	status = "okay";
+};
+
+/* K4B WiFi 为 USB (RTL8723BU)，无 SDIO，关闭 sdc1 */
+&sdc1 {
+	status = "disabled";
+};
+
+/* ============ I2C ============ */
+/* twi0/twi2 不用：twi0 引脚 PB2/PB3 已被 CAN0 占用；PE12/PE13 被 USB-ID/RMII 复位占用。
+ * 30Pin 座 2/4 脚的 TWI0 复用（PG12/PG13）与 I2S1 冲突，默认走 I2S1，需要时自行切换。 */
+&twi0 {
+	status = "disabled";
+};
+
+&twi2 {
+	status = "disabled";
+};
+
+/* TWI1 = CTP 触摸（PG8/PG9） */
+&twi1 {
+	clock-frequency = <400000>;
+	pinctrl-0 = <&twi1_pins_a>;
+	pinctrl-1 = <&twi1_pins_b>;
+	pinctrl-names = "default", "sleep";
+	status = "okay";
+
+	ctp@14 {
+		compatible = "allwinner,goodix";
+		device_type = "ctp";
+		reg = <0x14>;
+		status = "okay";
+		ctp_name = "gt9xxnew_ts";
+		ctp_twi_id = <0x1>;
+		ctp_twi_addr = <0x14>;
+		ctp_screen_max_x = <0x320>;
+		ctp_screen_max_y = <0x1e0>;
+		ctp_revert_x_flag = <0x0>;
+		ctp_revert_y_flag = <0x0>;
+		ctp_exchange_x_y_flag = <0x0>;
+		/* CTP-INT = PD17, CTP-RST = PD16（K4B 原理图 p7/p9） */
+		ctp_int_port = <&pio PD 17 GPIO_ACTIVE_HIGH>;
+		ctp_wakeup = <&pio PD 16 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/* TWI3 = 板载 RTC HYM8563TS（30Pin 座 27/29 脚同总线） */
+&twi3 {
+	clock-frequency = <400000>;
+	pinctrl-0 = <&twi3_pins_a>;
+	pinctrl-1 = <&twi3_pins_b>;
+	pinctrl-names = "default", "sleep";
+	status = "okay";
+
+	hym8563@51 {
+		compatible = "haoyu,hym8563";
+		reg = <0x51>;
+		status = "okay";
+	};
+};
+
+/* ============ SPI1 ============ */
+&spi1 {
+	clock-frequency = <100000000>;
+	pinctrl-0 = <&spi1_pins_a &spi1_pins_b>;
+	pinctrl-1 = <&spi1_pins_c>;
+	pinctrl-names = "default", "sleep";
+	spi_slave_mode = <0>;
+	spi1_cs_number = <1>;
+	spi1_cs_bitmap = <1>;
+	status = "okay";
+
+	/* 通用 spidev 设备（/dev/spidev1.0），30Pin 座 19/21/23/25 */
+	spi_board1@0 {
+		device_type = "spi_board1";
+		compatible = "rohm,dh2228fv";
+		spi-max-frequency = <0x5f5e100>;
+		reg = <0x0>;
+		spi-rx-bus-width = <0x4>;
+		spi-tx-bus-width = <0x4>;
+		status = "okay";
+	};
+};
+
+&spi0 {
+	status = "disabled";
+};
+
+/* ============ CAN ============ */
+/* T113 CAN 控制器节点（dtsi 无预置，这里补全）。
+ * 驱动：patch/linux 内 sun4i_can.c（allwinner,sunxi-t113-can）
+ * 收发器：TCAN1044V-Q1 3.3V（原理图 p13），终端电阻由座内跳帽选择 */
+&soc {
+	can0: can@02504000 {
+		compatible = "allwinner,sunxi-t113-can";
+		reg = <0x0 0x02504000 0x0 0x400>;
+		interrupts = <GIC_SPI 21 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&ccu CLK_BUS_CAN0>;
+		clock-names = "can0";
+		resets = <&ccu RST_BUS_CAN0>;
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&can0_pins_a>;
+		pinctrl-1 = <&can0_pins_b>;
+		status = "okay";
+	};
+
+	can1: can@02504400 {
+		compatible = "allwinner,sunxi-t113-can";
+		reg = <0x0 0x02504400 0x0 0x400>;
+		interrupts = <GIC_SPI 22 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&ccu CLK_BUS_CAN1>;
+		clock-names = "can1";
+		resets = <&ccu RST_BUS_CAN1>;
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&can1_pins_a>;
+		pinctrl-1 = <&can1_pins_b>;
+		status = "okay";
+	};
+};
+
+/* ============ 以太网（RMII + IP101GR） ============ */
+&gmac0 {
+	pinctrl-0 = <&gmac0_pins_a>;
+	pinctrl-1 = <&gmac0_pins_b>;
+	pinctrl-names = "default", "sleep";
+	phy-mode = "rmii";
+	use_ephy25m = <1>;
+	tx-delay = <7>;
+	rx-delay = <31>;
+	phy-rst = <&pio PE 13 GPIO_ACTIVE_HIGH>;
+	status = "okay";
+};
+
+/* ============ USB ============ */
+/* USB0 = OTG Type-C（ID=PE12），VBUS 开关 = PD20（reg_usb1_vbus） */
+&usbc0 {
+	device_type = "usbc0";
+	usb_port_type = <0x2>;
+	usb_detect_type = <0x1>;
+	usb_detect_mode = <0>;
+	usb_id_gpio = <&pio PE 12 GPIO_ACTIVE_HIGH>;
+	enable-active-high;
+	usb_det_vbus_gpio = <&pio PD 20 GPIO_ACTIVE_HIGH>;
+	usb_wakeup_suspend = <0>;
+	usb_serial_unique = <0>;
+	usb_serial_number = "20080411";
+	rndis_wceis = <1>;
+	status = "okay";
+};
+
+&ehci0 {
+	drvvbus-supply = <&reg_usb1_vbus>;
+};
+
+&ohci0 {
+	drvvbus-supply = <&reg_usb1_vbus>;
+};
+
+/* USB1 → GL850G HUB（2x Type-A + RTL8723BU + 4G），下行 VBUS 由 HUB 管理 */
+&usbc1 {
+	device_type = "usbc1";
+	usb_port_type = <0x01>;
+	sb_detect_type = <0x1>;
+	usb_regulator_io = "nocare";
+	usb_wakeup_suspend = <0>;
+	status = "okay";
+};
+
+&ehci1 {
+	status = "okay";
+};
+
+&ohci1 {
+	status = "okay";
+};
+
+/* ============ PWM ============ */
+/* pwm3 = 30Pin 座 20 脚（PD19）；K4B 无 PWM 稳压器，勿将其用于 CPU 供电 */
+&pwm3 {
+	pinctrl-names = "active", "sleep";
+	pinctrl-0 = <&pwm3_pin_a>;
+	pinctrl-1 = <&pwm3_pin_b>;
+	status = "okay";
+};
+
+/* pwm7 = LCD 背光（PD22） */
+&pwm7 {
+	pinctrl-names = "active", "sleep";
+	pinctrl-0 = <&pwm7_pin_a>;
+	pinctrl-1 = <&pwm7_pin_b>;
+	status = "okay";
+};
+
+/* ============ ADC 按键（USER 键，GPADC0/ADKEY0） ============ */
+&gpadc {
+	channel_num = <1>;
+	channel_select = <0x1>;
+	channel_data_select = <0>;
+	channel_compare_select = <0x1>;
+	channel_cld_select = <0x1>;
+	channel_chd_select = <0>;
+	channel0_compare_lowdata = <1700000>;
+	channel0_compare_higdata = <1200000>;
+	key_cnt = <1>;
+	/* USER 键按下时 ADKEY0 经肖特基二极管到地，约 0.3V（可按实测微调） */
+	key0_vol = <300>;
+	key0_val = <28>; /* KEY_ENTER */
+	status = "okay";
+};
+
+/* ============ 显示 ============ */
+&disp {
+	disp_init_enable         = <1>;
+	disp_mode                = <0>;
+
+	screen0_output_type      = <1>;  /* K4B 无 HDMI，LCD 输出 */
+	screen0_output_mode      = <4>;
+	screen1_output_type      = <0>;
+	screen1_output_mode      = <4>;
+
+	dev0_output_type         = <1>;
+	dev0_output_mode         = <4>;
+	dev0_screen_id           = <0>;
+	dev0_do_hpd              = <0>;
+
+	dev1_output_type         = <0>;
+	dev1_output_mode         = <4>;
+	dev1_screen_id           = <1>;
+	dev1_do_hpd              = <0>;
+
+	def_output_dev           = <0>;
+	hdmi_mode_check          = <1>;
+
+	fb0_format               = <0>;
+	fb0_width                = <0>;  /* 跟随 panel 分辨率 */
+	fb0_height               = <0>;
+
+	fb1_format               = <0>;
+	fb1_width                = <0>;
+	fb1_height               = <0>;
+	chn_cfg_mode             = <1>;
+
+	disp_para_zone           = <1>;
+};
+
+/* 默认启用 Note3 (S6E3FA0) MIPI 4-lane 屏驱动。
+ * K4B LCD 控制脚：LCD_PWREN_H=PD18、LCD-RST=PD21、背光 PWM7=PD22。
+ * 切换 LVDS/RGB 模板见 doc/kickpi_wiki/K4B_引脚分配分析.md。 */
+&lcd0 {
+	lcd_used            = <1>;
+
+	lcd_driver_name     = "s6e3fa0_1080p_video";
+	lcd_if              = <4>;
+
+	lcd_x               = <1080>;
+	lcd_y               = <1920>;
+	lcd_width           = <62>;
+	lcd_height          = <110>;
+	lcd_dclk_freq       = <150>;
+
+	/* Note3 S6E3FA0: HBP36/HPW10/HFP162 VBP3/VPW2/VFP13 @60fps
+	 * allwinner lcd_hbp/lcd_vbp INCLUDE pulse width */
+	lcd_hbp             = <46>;
+	lcd_ht              = <1288>;
+	lcd_hspw            = <10>;
+	lcd_vbp             = <5>;
+	lcd_vt              = <1938>;
+	lcd_vspw            = <2>;
+
+	/* AMOLED: 无 PWM 背光，亮度经 DCS 0x51/AID */
+	lcd_pwm_used        = <0>;
+
+	lcd_dsi_lane        = <4>;
+	lcd_dsi_if          = <0>;
+	lcd_dsi_format      = <0>;
+	lcd_dsi_te          = <0>;
+	lcd_frm             = <0>;
+	lcd_io_phase        = <0>;
+	lcd_gamma_en        = <0>;
+	lcd_bright_curve_en = <0>;
+	lcd_cmap_en         = <0>;
+
+	/* lcd_gpio_0: LCD-RST (PD21)；lcd_gpio_1: LCD_PWREN_H (PD18) */
+	lcd_gpio_0 = <&pio PD 21 GPIO_ACTIVE_HIGH>;
+	lcd_gpio_1 = <&pio PD 18 GPIO_ACTIVE_HIGH>;
+	pinctrl-0 = <&dsi4lane_pins_a>;
+	pinctrl-1 = <&dsi4lane_pins_b>;
+};
+
+/* ==== LVDS 模板（1366x768 内嵌屏，需要时取消注释并停用上面的 DSI 块） ====
+&lcd0 {
+	lcd_used            = <1>;
+	lcd_driver_name     = "default_lcd";
+	lcd_backlight       = <50>;
+	lcd_if              = <3>;
+	lcd_x               = <1366>;
+	lcd_y               = <768>;
+	lcd_dclk_freq       = <70>;
+	lcd_pwm_used        = <1>;
+	lcd_pwm_ch          = <7>;
+	lcd_pwm_freq        = <50000>;
+	lcd_pwm_pol         = <1>;
+	lcd_hbp             = <160>;
+	lcd_ht              = <1440>;
+	lcd_hspw            = <32>;
+	lcd_vbp             = <23>;
+	lcd_vt              = <800>;
+	lcd_vspw            = <6>;
+	lcd_lvds_if         = <0>;
+	lcd_lvds_colordepth = <1>;
+	lcd_lvds_mode       = <0>;
+	lcd_frm             = <0>;
+	pinctrl-0 = <&lvds0_pins_a>;
+	pinctrl-1 = <&lvds0_pins_b>;
+};
+*/
+
+/* ============ 音频 ============ */
+&codec {
+	mic1gain 		= <0x1F>;
+	mic2gain 		= <0x1F>;
+	mic3gain 		= <0x1F>;
+	adcdrc_cfg		= <0x0>;
+	adchpf_cfg		= <0x1>;
+	dacdrc_cfg		= <0x0>;
+	dachpf_cfg		= <0x0>;
+	digital_vol 	= <0x00>;
+	lineout_vol 	= <0x1a>;
+	headphonegain	= <0x03>;
+	pa_level 		= <0x01>;
+	pa_pwr_level 	= <0x01>;
+	pa_msleep_time 	= <0x78>;
+	/* K4B 喇叭 PA = LY8006/AD51652（原理图 p10），SHDN = PE11，高电平工作
+	 * 若实测无声，改为 GPIO_ACTIVE_LOW 再试（不同批次 PA 极性可能不同）
+	 */
+	gpio-spk	= <&pio PE 11 GPIO_ACTIVE_HIGH>;
+	playback_cma	= <128>;
+	capture_cma	= <256>;
+	status = "okay";
+};
+
+&sndcodec {
+	hp_detect_case	= <0x00>;
+	jack_enable		= <0x01>;
+	status = "okay";
+};
+
+&dummy_cpudai {
+	playback_cma	= <128>;
+	capture_cma		= <256>;
+	status			= "okay";
+};
+
+/* K4B 无 DMIC 阵列 */
+&dmic {
+	status = "disabled";
+};
+
+&dmic_codec {
+	status = "disabled";
+};
+
+&sounddmic {
+	status = "disabled";
+};
+
+/* I2S1 引出到 30Pin 座 2/4/6/8 脚（PG12/PG13/PG14/PG15），无 MCLK 输出脚 */
+&daudio1 {
+	mclk_div 	= <0x00>;
+	frametype 	= <0x00>;
+	tdm_config 	= <0x01>;
+	sign_extend 	= <0x00>;
+	msb_lsb_first 	= <0x00>;
+	pcm_lrck_period = <0x80>;
+	slot_width_select = <0x20>;
+	pinctrl-names   = "default", "sleep";
+	pinctrl-0       = <&daudio1_pins_a &daudio1_pins_b &daudio1_pins_c>;
+	pinctrl-1       = <&daudio1_pins_d>;
+	pinctrl_used	= <0x1>;
+	status = "okay";
+};
+
+&sounddaudio1 {
+	status = "okay";
+	daudio1_master: simple-audio-card,codec {
+		/* dummy codec: 仅输出 I2S 波形到扩展座 */
+	};
+};
+
+/* SPDIF 未引出（PG18 不存在） */
+&spdif {
+	status = "disabled";
+};
+
+&soundspdif {
+	status = "disabled";
+};
+
+/* daudio0/ac108 为 MQ 板配置，K4B 不用 */
+&daudio0 {
+	status = "disabled";
+};
+
+/* ============ TV-OUT ============ */
+/* 原理图只有 TVOUT 的偏置/参考电压网络（p5/p6），板上没有 CVBS 输出座，
+ * 30Pin 与 LCD 座也未引 TV 引脚，故关闭
+ */
+&tv0 {
+	status = "disabled";
+};
+
+/* ============ 摄像头：K4B 未引出 CSI ============ */
+&vind0 {
+	status = "disabled";
+};
+
+&vinc0 {
+	status = "disabled";
+};
+
+&vinc1 {
+	status = "disabled";
+};
+
+/* ============ WiFi/BT：RTL8723BU 走 USB（GL850G HUB 下行），无需 dts 节点 ============
+ * MQ 板的 rfkill/btlpm/sdio-wlan 方案不适用，K4B 不定义这些节点。 */
+
+/* K4B 无红外接收头 */
+&s_cir0 {
+	status = "disabled";
+};
+
+&ir1 {
+	status = "disabled";
+};
+
+/* K4B 无电阻触摸（TP-X/Y 悬空） */
+&rtp {
+	status = "disabled";
+};
+
+/* K4B 无 WS2812 LED（PF2 为 SD CLK） */
+&ledc {
+	status = "disabled";
+};
